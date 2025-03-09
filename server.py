@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO
 import eventlet
@@ -34,4 +35,6 @@ def handle_get(data):
     socketio.emit('response', {"key": key, "value": value})
 
 if __name__ == '__main__':
-    socketio.run(app, host="0.0.0.0", port=10000)
+    port = int(os.getenv("PORT", 10000))  # RenderのPORT環境変数を使用
+    socketio.run(app, host="0.0.0.0", port=port)
+    
