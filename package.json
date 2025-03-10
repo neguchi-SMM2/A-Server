@@ -1,0 +1,4 @@
+mkdir websocket-server
+cd websocket-server
+npm init -y
+npm install ws express
