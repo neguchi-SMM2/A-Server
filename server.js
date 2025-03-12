@@ -1,153 +1,98 @@
-const fs = require("fs");
-const crypto = require("crypto");
-const WebSocket = require("ws");
+const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
-// 🔑 暗号化用の秘密鍵（32バイト = 256ビット）
-const SECRET_KEY = "ApUcaTynMjy5iTsZQVgHCeRCnGbn2uwK"; // 必ず32文字
-const DATA_FILE = "data.json";
+// 🔹 Supabase 接続情報
+const SUPABASE_URL = "https://mnhqwwrdyoqgawklcrjv.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1uaHF3d3JkeW9xZ2F3a2xjcmp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE3NjY0MTIsImV4cCI6MjA1NzM0MjQxMn0.HtXQpo-Vv66Qti09jyx6A9gNiDCvo2bYFWta0qEDQEc";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// 🔄 データの保存先（ルームごと）
-let storage = {};
-
-// 📂 ファイルが存在する場合は読み込む
-if (fs.existsSync(DATA_FILE)) {
-    try {
-        const encryptedData = fs.readFileSync(DATA_FILE, "utf8");
-        storage = decryptData(encryptedData);
-    } catch (err) {
-        console.error("Error loading data:", err);
-    }
-}
-
-// 📡 WebSocket サーバーを起動
+// 📡 WebSocketサーバーを作成
 const wss = new WebSocket.Server({ port: 10000 });
 
 wss.on("connection", (ws) => {
-    ws.on("message", (message) => {
+    ws.on("message", async (message) => {
         try {
             const { request_type, username, data, room, order, limit } = JSON.parse(message);
 
-            if (!room) {
-                return ws.send(JSON.stringify({ status: "error", message: "Room is required" }));
-            }
-
-            // ルームがない場合は初期化
-            if (!storage[room]) {
-                storage[room] = [];
-            }
-
             switch (request_type) {
                 case "save":
-                    storage[room].push({ username, data, timestamp: Date.now() });
-                    saveData();
+                    // 🔹 データを Supabase に保存
+                    const { error: saveError } = await supabase
+                        .from("messages")
+                        .insert([{ room, username, data, timestamp: Date.now() }]);
+
+                    if (saveError) throw saveError;
                     ws.send(JSON.stringify({ status: "success", message: "Data saved" }));
                     break;
 
+                case "get_all":
+                    // 🔹 Supabase からデータ取得 + 並び替え
+                    let { data: messages, error: getError } = await supabase
+                        .from("messages")
+                        .select("*")
+                        .eq("room", room)
+                        .order("data", { ascending: order === "asc" })
+                        .limit(limit || 100);
+
+                    if (getError) throw getError;
+                    ws.send(JSON.stringify({ status: "success", data: messages }));
+                    break;
+
                 case "delete_all":
-                    storage[room] = [];
-                    saveData();
+                    // 🔹 ルーム内のデータを全削除
+                    const { error: deleteAllError } = await supabase
+                        .from("messages")
+                        .delete()
+                        .eq("room", room);
+
+                    if (deleteAllError) throw deleteAllError;
                     ws.send(JSON.stringify({ status: "success", message: "All data deleted" }));
                     break;
 
                 case "delete_nth":
-                    if (typeof data === "number" && data >= 0 && data < storage[room].length) {
-                        storage[room].splice(data, 1);
-                        saveData();
-                        ws.send(JSON.stringify({ status: "success", message: `Deleted index ${data}` }));
-                    } else {
+                    // 🔹 n番目のデータを削除
+                    let { data: messagesForDelete, error: getDeleteError } = await supabase
+                        .from("messages")
+                        .select("*")
+                        .eq("room", room)
+                        .order("timestamp", { ascending: true })
+                        .limit(1)
+                        .offset(data); // n番目のデータを取得
+
+                    if (getDeleteError) throw getDeleteError;
+                    if (!messagesForDelete.length) {
                         ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
+                        return;
                     }
+
+                    const { error: deleteNthError } = await supabase
+                        .from("messages")
+                        .delete()
+                        .eq("id", messagesForDelete[0].id);
+
+                    if (deleteNthError) throw deleteNthError;
+                    ws.send(JSON.stringify({ status: "success", message: `Deleted index ${data}` }));
                     break;
 
                 case "delete_user":
-                    storage[room] = storage[room].filter(entry => entry.username !== username);
-                    saveData();
+                    // 🔹 特定のユーザーのデータを削除
+                    const { error: deleteUserError } = await supabase
+                        .from("messages")
+                        .delete()
+                        .eq("room", room)
+                        .eq("username", username);
+
+                    if (deleteUserError) throw deleteUserError;
                     ws.send(JSON.stringify({ status: "success", message: `Deleted data from ${username}` }));
-                    break;
-
-                case "get_nth":
-                    if (typeof data === "number" && data >= 0 && data < storage[room].length) {
-                        ws.send(JSON.stringify({ status: "success", data: storage[room][data] }));
-                    } else {
-                        ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
-                    }
-                    break;
-
-                case "get_user":
-                    const userData = storage[room].filter(entry => entry.username === username);
-                    ws.send(JSON.stringify({ status: "success", data: userData }));
-                    break;
-
-                case "get_all":
-                    let sortedData = [...storage[room]];
-                    
-                    // データの値を基準にソート
-                    sortedData.sort((a, b) => {
-                        let valA = isNaN(a.data) ? a.data : Number(a.data);
-                        let valB = isNaN(b.data) ? b.data : Number(b.data);
-                        return order === "desc" ? valB - valA : valA - valB;
-                    });
-
-                    // クライアントが件数を指定した場合、その数だけ送信
-                    const limitedData = limit ? sortedData.slice(0, limit) : sortedData;
-                    ws.send(JSON.stringify({ status: "success", data: limitedData }));
                     break;
 
                 default:
                     ws.send(JSON.stringify({ status: "error", message: "Invalid request type" }));
             }
         } catch (err) {
-            ws.send(JSON.stringify({ status: "error", message: "Invalid JSON format" }));
+            ws.send(JSON.stringify({ status: "error", message: err.message }));
         }
     });
 });
-
-// 📌 AES-256-CBC 暗号化関数
-function encryptData(data) {
-    const iv = crypto.randomBytes(16); // 16バイトのIVを生成
-    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
-    let encrypted = cipher.update(JSON.stringify(data), "utf8", "base64");
-    encrypted += cipher.final("base64");
-    return iv.toString("base64") + ":" + encrypted; // IVと暗号化データを結合
-}
-
-// 🔓 AES-256-CBC 復号化関数
-function decryptData(encryptedData) {
-    try {
-        if (!encryptedData || !encryptedData.includes(":")) {
-            console.warn("Warning: Invalid encrypted data format.");
-            return {}; // データが不正なら空のオブジェクトを返す
-        }
-
-        const [ivBase64, encryptedText] = encryptedData.split(":");
-        if (!ivBase64 || !encryptedText) {
-            console.warn("Warning: Missing IV or encrypted text.");
-            return {}; // 不正なデータなら空にする
-        }
-
-        const iv = Buffer.from(ivBase64, "base64");
-        if (iv.length !== 16) {
-            throw new Error("Invalid initialization vector length");
-        }
-
-        const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
-        let decrypted = decipher.update(encryptedText, "base64", "utf8");
-        decrypted += decipher.final("utf8");
-        return JSON.parse(decrypted);
-    } catch (err) {
-        console.error("Error decrypting data:", err);
-        return {}; // 復号に失敗したら空のデータを返す
-    }
-}
-
-// 💾 データを暗号化して保存
-function saveData() {
-    try {
-        const encryptedData = encryptData(storage);
-        fs.writeFileSync(DATA_FILE, encryptedData, "utf8");
-    } catch (err) {
-        console.error("Error saving data:", err);
-    }
-}
 
 console.log("WebSocket server is running");
