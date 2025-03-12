@@ -1,131 +1,133 @@
-const WebSocket = require('ws');
-const fs = require('fs');
-const crypto = require('crypto');
+const fs = require("fs");
+const crypto = require("crypto-js");
+const WebSocket = require("ws");
 
-const SECRET_KEY = 'ILoveRoarVeryMuch_70sheets_SMM2_'; // 32文字のキー
-const IV = 'neguchi_SMM2_623'; // 16文字のIV
-const DATA_FILE = 'data.json';
-const rooms = {};
+const SECRET_KEY = "ILoveRoarVeryMuch_neguchi_SMM2_"; // ここは必ず変更すること！
+const DATA_FILE = "data.json";
 
-// AES-256-CBC で暗号化
-function encrypt(text) {
-    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(SECRET_KEY), Buffer.from(IV));
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return encrypted;
+// WebSocketサーバーの設定
+const wss = new WebSocket.Server({ port: 10000 });
+
+// データを暗号化して保存
+function encryptData(data) {
+    return crypto.AES.encrypt(JSON.stringify(data), SECRET_KEY).toString();
 }
 
-// AES-256-CBC で復号化
-function decrypt(text) {
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(SECRET_KEY), Buffer.from(IV));
-    let decrypted = decipher.update(text, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-}
-
-// データ保存
-function saveData() {
-    const encryptedData = encrypt(JSON.stringify(rooms));
-    fs.writeFileSync(DATA_FILE, encryptedData, 'utf8');
-}
-
-// データ読み込み
-function loadData() {
-    if (fs.existsSync(DATA_FILE)) {
-        try {
-            const encryptedData = fs.readFileSync(DATA_FILE, 'utf8');
-            const decryptedData = decrypt(encryptedData);
-            Object.assign(rooms, JSON.parse(decryptedData));
-        } catch (error) {
-            console.error('Error loading data:', error);
-        }
+// データを復号化
+function decryptData(encryptedData) {
+    try {
+        const bytes = crypto.AES.decrypt(encryptedData, SECRET_KEY);
+        return JSON.parse(bytes.toString(crypto.enc.Utf8));
+    } catch (error) {
+        console.error("Decryption error:", error);
+        return []; // 復号失敗時は空データを返す
     }
 }
 
-// 初期データ読み込み
-loadData();
+// ファイルからデータを読み込む
+function loadData() {
+    try {
+        if (!fs.existsSync(DATA_FILE)) return {};
+        const encryptedData = fs.readFileSync(DATA_FILE, "utf8");
+        return decryptData(encryptedData);
+    } catch (error) {
+        console.error("Error loading data:", error);
+        return {};
+    }
+}
 
-// WebSocketサーバー作成
-const wss = new WebSocket.Server({ port: 10000 });
+// ファイルにデータを保存
+function saveData(data) {
+    try {
+        const encryptedData = encryptData(data);
+        fs.writeFileSync(DATA_FILE, encryptedData, "utf8");
+    } catch (error) {
+        console.error("Error saving data:", error);
+    }
+}
 
-wss.on('connection', ws => {
-    console.log('Client connected');
+// データを管理するオブジェクト（初期化）
+let database = loadData();
 
-    ws.on('message', message => {
+wss.on("connection", (ws) => {
+    console.log("Client connected");
+
+    ws.on("message", (message) => {
         try {
-            const { request_type, username, data, room, order, limit } = JSON.parse(message);
+            const { request_type, username, data, room, order, limit, index } = JSON.parse(message);
 
-            if (!room) {
-                ws.send(JSON.stringify({ status: 'error', message: 'Room name is required' }));
-                return;
-            }
-
-            if (!rooms[room]) rooms[room] = [];
+            // roomが指定されていない場合は "default" を使用
+            const roomName = room || "default";
+            if (!database[roomName]) database[roomName] = [];
 
             switch (request_type) {
-                case 'save':
-                    rooms[room].push({ username, data, timestamp: Date.now() });
-                    saveData();
-                    ws.send(JSON.stringify({ status: 'success', message: 'Data saved' }));
+                case "save":
+                    database[roomName].push({ username, data, timestamp: Date.now() });
+                    saveData(database);
+                    ws.send(JSON.stringify({ status: "success", message: "Data saved!" }));
                     break;
 
-                case 'get_all':
-                    let sortedData = rooms[room].slice();
-                    if (order === 'asc') sortedData.sort((a, b) => a.timestamp - b.timestamp);
-                    if (order === 'desc') sortedData.sort((a, b) => b.timestamp - a.timestamp);
-                    if (limit) sortedData = sortedData.slice(0, limit);
-                    ws.send(JSON.stringify({ status: 'success', data: sortedData }));
-                    break;
+                case "get":
+                    let roomData = [...(database[roomName] || [])];
 
-                case 'get_nth':
-                    const index = parseInt(data, 10);
-                    if (index >= 0 && index < rooms[room].length) {
-                        ws.send(JSON.stringify({ status: 'success', data: rooms[room][index] }));
+                    // 昇順 or 降順
+                    if (order === "desc") {
+                        roomData.sort((a, b) => b.timestamp - a.timestamp);
                     } else {
-                        ws.send(JSON.stringify({ status: 'error', message: 'Invalid index' }));
+                        roomData.sort((a, b) => a.timestamp - b.timestamp);
+                    }
+
+                    // クライアントが件数を指定した場合、その数だけ送信
+                    const limitedData = limit ? roomData.slice(0, limit) : roomData;
+                    ws.send(JSON.stringify({ status: "success", data: limitedData }));
+                    break;
+
+                case "get_nth":
+                    if (index !== undefined && database[roomName][index]) {
+                        ws.send(JSON.stringify({ status: "success", data: database[roomName][index] }));
+                    } else {
+                        ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
                     }
                     break;
 
-                case 'get_user':
-                    const userData = rooms[room].filter(entry => entry.username === username);
-                    ws.send(JSON.stringify({ status: 'success', data: userData }));
+                case "get_by_user":
+                    const userData = (database[roomName] || []).filter(entry => entry.username === username);
+                    ws.send(JSON.stringify({ status: "success", data: userData }));
                     break;
 
-                case 'delete_all':
-                    rooms[room] = [];
-                    saveData();
-                    ws.send(JSON.stringify({ status: 'success', message: 'All data deleted' }));
+                case "delete_all":
+                    database[roomName] = [];
+                    saveData(database);
+                    ws.send(JSON.stringify({ status: "success", message: "All data deleted" }));
                     break;
 
-                case 'delete_nth':
-                    const deleteIndex = parseInt(data, 10);
-                    if (deleteIndex >= 0 && deleteIndex < rooms[room].length) {
-                        rooms[room].splice(deleteIndex, 1);
-                        saveData();
-                        ws.send(JSON.stringify({ status: 'success', message: 'Deleted nth data' }));
+                case "delete_nth":
+                    if (index !== undefined && database[roomName][index]) {
+                        database[roomName].splice(index, 1);
+                        saveData(database);
+                        ws.send(JSON.stringify({ status: "success", message: "Nth data deleted" }));
                     } else {
-                        ws.send(JSON.stringify({ status: 'error', message: 'Invalid index' }));
+                        ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
                     }
                     break;
 
-                case 'delete_user':
-                    rooms[room] = rooms[room].filter(entry => entry.username !== username);
-                    saveData();
-                    ws.send(JSON.stringify({ status: 'success', message: 'Deleted user data' }));
+                case "delete_by_user":
+                    database[roomName] = (database[roomName] || []).filter(entry => entry.username !== username);
+                    saveData(database);
+                    ws.send(JSON.stringify({ status: "success", message: `All data from ${username} deleted` }));
                     break;
 
                 default:
-                    ws.send(JSON.stringify({ status: 'error', message: 'Invalid request type' }));
-                    break;
+                    ws.send(JSON.stringify({ status: "error", message: "Invalid request type" }));
             }
         } catch (error) {
-            ws.send(JSON.stringify({ status: 'error', message: 'Invalid JSON format' }));
+            ws.send(JSON.stringify({ status: "error", message: "Invalid JSON format" }));
         }
     });
 
-    ws.on('close', () => {
-        console.log('Client disconnected');
+    ws.on("close", () => {
+        console.log("Client disconnected");
     });
 });
 
-console.log('WebSocket server running');
+console.log("WebSocket server is running");
