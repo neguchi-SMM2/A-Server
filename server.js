@@ -2,33 +2,34 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const crypto = require('crypto');
 
-const SECRET_KEY = '70sheets_SMM2'; // 🔑 直接ハードコーディング
+const SECRET_KEY = 'ILoveRoarVeryMuch_70sheets_SMM2_'; // 32文字のキー
+const IV = 'neguchi_SMM2_623'; // 16文字のIV
 const DATA_FILE = 'data.json';
-const rooms = {}; // 部屋ごとのデータ
+const rooms = {};
 
-// 🔐 AES暗号化
+// AES-256-CBC で暗号化
 function encrypt(text) {
-    const cipher = crypto.createCipher('aes-256-cbc', SECRET_KEY);
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(SECRET_KEY), Buffer.from(IV));
     let encrypted = cipher.update(text, 'utf8', 'hex');
     encrypted += cipher.final('hex');
     return encrypted;
 }
 
-// 🔓 AES復号化
+// AES-256-CBC で復号化
 function decrypt(text) {
-    const decipher = crypto.createDecipher('aes-256-cbc', SECRET_KEY);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(SECRET_KEY), Buffer.from(IV));
     let decrypted = decipher.update(text, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
 }
 
-// 💾 データ保存
+// データ保存
 function saveData() {
     const encryptedData = encrypt(JSON.stringify(rooms));
     fs.writeFileSync(DATA_FILE, encryptedData, 'utf8');
 }
 
-// 💾 データ読み込み
+// データ読み込み
 function loadData() {
     if (fs.existsSync(DATA_FILE)) {
         try {
