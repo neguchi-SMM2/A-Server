@@ -1,13 +1,13 @@
 {
   "name": "websocket-server",
   "version": "1.0.0",
-  "description": "WebSocket server with encrypted JSON storage",
+  "description": "WebSocket server with Supabase",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-  "@supabase/supabase-js": "^2.0.0",
-  "ws": "^8.15.0"
-　}
+    "@supabase/supabase-js": "^2.0.0",
+    "ws": "^8.15.0"
+  }
 }
