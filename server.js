@@ -80,7 +80,15 @@ wss.on("connection", (ws) => {
 
                 case "get_all":
                     let sortedData = [...storage[room]];
-                    if (order === "desc") sortedData.reverse();
+                    
+                    // データの値を基準にソート
+                    sortedData.sort((a, b) => {
+                        let valA = isNaN(a.data) ? a.data : Number(a.data);
+                        let valB = isNaN(b.data) ? b.data : Number(b.data);
+                        return order === "desc" ? valB - valA : valA - valB;
+                    });
+
+                    // クライアントが件数を指定した場合、その数だけ送信
                     const limitedData = limit ? sortedData.slice(0, limit) : sortedData;
                     ws.send(JSON.stringify({ status: "success", data: limitedData }));
                     break;
