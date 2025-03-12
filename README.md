@@ -1,3 +1,4 @@
 # A-Server
 
-{ request_type : "save|get|get_n|get_user|delete_all|delete_n|delete_user" , data : "your data" }
+<a href="https://github.com/neguchi-SMM2" target="_blank">neguchi-SMM2</a>によって作成されたデータ保存用サーバー</br>
+**重要なデータは保存しないでください。**
