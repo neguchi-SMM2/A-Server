@@ -1,133 +1,126 @@
 const fs = require("fs");
-const crypto = require("crypto-js");
+const crypto = require("crypto");
 const WebSocket = require("ws");
 
-const SECRET_KEY = "ILoveRoarVeryMuch_neguchi_SMM2_"; // ここは必ず変更すること！
+// 🔑 暗号化用の秘密鍵（32バイト = 256ビット）
+const SECRET_KEY = "ApUcaTynMjy5iTsZQVgHCeRCnGbn2uwK"; // 必ず32文字
 const DATA_FILE = "data.json";
 
-// WebSocketサーバーの設定
+// 🔄 データの保存先（ルームごと）
+let storage = {};
+
+// 📂 ファイルが存在する場合は読み込む
+if (fs.existsSync(DATA_FILE)) {
+    try {
+        const encryptedData = fs.readFileSync(DATA_FILE, "utf8");
+        storage = decryptData(encryptedData);
+    } catch (err) {
+        console.error("Error loading data:", err);
+    }
+}
+
+// 📡 WebSocket サーバーを起動
 const wss = new WebSocket.Server({ port: 10000 });
 
-// データを暗号化して保存
-function encryptData(data) {
-    return crypto.AES.encrypt(JSON.stringify(data), SECRET_KEY).toString();
-}
-
-// データを復号化
-function decryptData(encryptedData) {
-    try {
-        const bytes = crypto.AES.decrypt(encryptedData, SECRET_KEY);
-        return JSON.parse(bytes.toString(crypto.enc.Utf8));
-    } catch (error) {
-        console.error("Decryption error:", error);
-        return []; // 復号失敗時は空データを返す
-    }
-}
-
-// ファイルからデータを読み込む
-function loadData() {
-    try {
-        if (!fs.existsSync(DATA_FILE)) return {};
-        const encryptedData = fs.readFileSync(DATA_FILE, "utf8");
-        return decryptData(encryptedData);
-    } catch (error) {
-        console.error("Error loading data:", error);
-        return {};
-    }
-}
-
-// ファイルにデータを保存
-function saveData(data) {
-    try {
-        const encryptedData = encryptData(data);
-        fs.writeFileSync(DATA_FILE, encryptedData, "utf8");
-    } catch (error) {
-        console.error("Error saving data:", error);
-    }
-}
-
-// データを管理するオブジェクト（初期化）
-let database = loadData();
-
 wss.on("connection", (ws) => {
-    console.log("Client connected");
-
     ws.on("message", (message) => {
         try {
-            const { request_type, username, data, room, order, limit, index } = JSON.parse(message);
+            const { request_type, username, data, room, order, limit } = JSON.parse(message);
 
-            // roomが指定されていない場合は "default" を使用
-            const roomName = room || "default";
-            if (!database[roomName]) database[roomName] = [];
+            if (!room) {
+                return ws.send(JSON.stringify({ status: "error", message: "Room is required" }));
+            }
+
+            // ルームがない場合は初期化
+            if (!storage[room]) {
+                storage[room] = [];
+            }
 
             switch (request_type) {
                 case "save":
-                    database[roomName].push({ username, data, timestamp: Date.now() });
-                    saveData(database);
-                    ws.send(JSON.stringify({ status: "success", message: "Data saved!" }));
-                    break;
-
-                case "get":
-                    let roomData = [...(database[roomName] || [])];
-
-                    // 昇順 or 降順
-                    if (order === "desc") {
-                        roomData.sort((a, b) => b.timestamp - a.timestamp);
-                    } else {
-                        roomData.sort((a, b) => a.timestamp - b.timestamp);
-                    }
-
-                    // クライアントが件数を指定した場合、その数だけ送信
-                    const limitedData = limit ? roomData.slice(0, limit) : roomData;
-                    ws.send(JSON.stringify({ status: "success", data: limitedData }));
-                    break;
-
-                case "get_nth":
-                    if (index !== undefined && database[roomName][index]) {
-                        ws.send(JSON.stringify({ status: "success", data: database[roomName][index] }));
-                    } else {
-                        ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
-                    }
-                    break;
-
-                case "get_by_user":
-                    const userData = (database[roomName] || []).filter(entry => entry.username === username);
-                    ws.send(JSON.stringify({ status: "success", data: userData }));
+                    storage[room].push({ username, data, timestamp: Date.now() });
+                    saveData();
+                    ws.send(JSON.stringify({ status: "success", message: "Data saved" }));
                     break;
 
                 case "delete_all":
-                    database[roomName] = [];
-                    saveData(database);
+                    storage[room] = [];
+                    saveData();
                     ws.send(JSON.stringify({ status: "success", message: "All data deleted" }));
                     break;
 
                 case "delete_nth":
-                    if (index !== undefined && database[roomName][index]) {
-                        database[roomName].splice(index, 1);
-                        saveData(database);
-                        ws.send(JSON.stringify({ status: "success", message: "Nth data deleted" }));
+                    if (typeof data === "number" && data >= 0 && data < storage[room].length) {
+                        storage[room].splice(data, 1);
+                        saveData();
+                        ws.send(JSON.stringify({ status: "success", message: `Deleted index ${data}` }));
                     } else {
                         ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
                     }
                     break;
 
-                case "delete_by_user":
-                    database[roomName] = (database[roomName] || []).filter(entry => entry.username !== username);
-                    saveData(database);
-                    ws.send(JSON.stringify({ status: "success", message: `All data from ${username} deleted` }));
+                case "delete_user":
+                    storage[room] = storage[room].filter(entry => entry.username !== username);
+                    saveData();
+                    ws.send(JSON.stringify({ status: "success", message: `Deleted data from ${username}` }));
+                    break;
+
+                case "get_nth":
+                    if (typeof data === "number" && data >= 0 && data < storage[room].length) {
+                        ws.send(JSON.stringify({ status: "success", data: storage[room][data] }));
+                    } else {
+                        ws.send(JSON.stringify({ status: "error", message: "Invalid index" }));
+                    }
+                    break;
+
+                case "get_user":
+                    const userData = storage[room].filter(entry => entry.username === username);
+                    ws.send(JSON.stringify({ status: "success", data: userData }));
+                    break;
+
+                case "get_all":
+                    let sortedData = [...storage[room]];
+                    if (order === "desc") sortedData.reverse();
+                    const limitedData = limit ? sortedData.slice(0, limit) : sortedData;
+                    ws.send(JSON.stringify({ status: "success", data: limitedData }));
                     break;
 
                 default:
                     ws.send(JSON.stringify({ status: "error", message: "Invalid request type" }));
             }
-        } catch (error) {
+        } catch (err) {
             ws.send(JSON.stringify({ status: "error", message: "Invalid JSON format" }));
         }
     });
-
-    ws.on("close", () => {
-        console.log("Client disconnected");
-    });
 });
+
+// 📌 AES-256-CBC 暗号化関数
+function encryptData(data) {
+    const iv = crypto.randomBytes(16); // 16バイトのIVを生成
+    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
+    let encrypted = cipher.update(JSON.stringify(data), "utf8", "base64");
+    encrypted += cipher.final("base64");
+    return iv.toString("base64") + ":" + encrypted; // IVと暗号化データを結合
+}
+
+// 🔓 AES-256-CBC 復号化関数
+function decryptData(encryptedData) {
+    const [ivBase64, encryptedText] = encryptedData.split(":");
+    const iv = Buffer.from(ivBase64, "base64");
+    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
+    let decrypted = decipher.update(encryptedText, "base64", "utf8");
+    decrypted += decipher.final("utf8");
+    return JSON.parse(decrypted);
+}
+
+// 💾 データを暗号化して保存
+function saveData() {
+    try {
+        const encryptedData = encryptData(storage);
+        fs.writeFileSync(DATA_FILE, encryptedData, "utf8");
+    } catch (err) {
+        console.error("Error saving data:", err);
+    }
+}
 
 console.log("WebSocket server is running");
