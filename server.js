@@ -105,12 +105,31 @@ function encryptData(data) {
 
 // 🔓 AES-256-CBC 復号化関数
 function decryptData(encryptedData) {
-    const [ivBase64, encryptedText] = encryptedData.split(":");
-    const iv = Buffer.from(ivBase64, "base64");
-    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
-    let decrypted = decipher.update(encryptedText, "base64", "utf8");
-    decrypted += decipher.final("utf8");
-    return JSON.parse(decrypted);
+    try {
+        if (!encryptedData || !encryptedData.includes(":")) {
+            console.warn("Warning: Invalid encrypted data format.");
+            return {}; // データが不正なら空のオブジェクトを返す
+        }
+
+        const [ivBase64, encryptedText] = encryptedData.split(":");
+        if (!ivBase64 || !encryptedText) {
+            console.warn("Warning: Missing IV or encrypted text.");
+            return {}; // 不正なデータなら空にする
+        }
+
+        const iv = Buffer.from(ivBase64, "base64");
+        if (iv.length !== 16) {
+            throw new Error("Invalid initialization vector length");
+        }
+
+        const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(SECRET_KEY), iv);
+        let decrypted = decipher.update(encryptedText, "base64", "utf8");
+        decrypted += decipher.final("utf8");
+        return JSON.parse(decrypted);
+    } catch (err) {
+        console.error("Error decrypting data:", err);
+        return {}; // 復号に失敗したら空のデータを返す
+    }
 }
 
 // 💾 データを暗号化して保存
